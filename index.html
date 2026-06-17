@@ -105,8 +105,8 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, initializeFirestore, collection, getDocs, getCountFromServer, query, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, initializeFirestore, collection, getDocs, getCountFromServer, doc, getDoc, query, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 const firebaseConfig={apiKey:"AIzaSyB63DtgWz20gspl9AaFCM0qBHBSaWiBL1s",authDomain:"sinhwa-erp.firebaseapp.com",projectId:"sinhwa-erp",storageBucket:"sinhwa-erp.firebasestorage.app",messagingSenderId:"211386518933",appId:"1:211386518933:web:75f00d15b158be43fdba9c"};
 const COMPANY="sinhwameat";
 const app=initializeApp(firebaseConfig);
@@ -187,8 +187,14 @@ m_search.oninput=e=>renderMisu(e.target.value.trim());
 // ===== 상품원장(재고 LOT) =====
 async function loadLots(){
   lots=[];
-  const snap=await getDocs(col("lots"));
-  lots=snap.docs.map(d=>d.data()).sort((a,b)=>(a.name||"").localeCompare(b.name||"","ko"));
+  try{
+    const s=await getDoc(doc(db,`companies/${COMPANY}/meta/lots`));
+    if(s.exists() && s.data().data){ lots=JSON.parse(s.data().data); }
+  }catch(e){}
+  if(!lots.length){ // 예전 방식(컬렉션) 호환
+    try{ const c=await getDocs(col("lots")); lots=c.docs.map(d=>d.data()); }catch(e){}
+  }
+  lots.sort((a,b)=>(a.name||"").localeCompare(b.name||"","ko"));
   const isAdj=(x)=>Math.abs((x.kg||0)-(x.amount||0))<1 && (x.kg||0)!==0; // 수수료·재고조정(Kg칸에 원)
   const phys=lots.filter(x=>!isAdj(x));
   i_cnt.textContent=new Set(phys.map(x=>x.code)).size.toLocaleString();
@@ -306,10 +312,11 @@ function startApp(){
   loadCounts();
 }
 async function doLogin(){
-  const msg=$("lg-msg"); msg.textContent="로그인 중...";
-  try{ await signInWithPopup(auth, new GoogleAuthProvider()); }
-  catch(e){ msg.textContent="로그인 취소/실패 — 다시 시도하세요. ("+(e.code||"")+")"; }
+  $("lg-msg").textContent="구글 로그인 화면으로 이동합니다...";
+  try{ await signInWithRedirect(auth, new GoogleAuthProvider()); }
+  catch(e){ $("lg-msg").textContent="로그인 실패 — 다시 시도하세요. ("+(e.code||"")+")"; }
 }
+getRedirectResult(auth).catch(e=>{ $("lg-msg").textContent="로그인 실패: "+(e.code||e.message||""); });
 $("lg-google").onclick=doLogin;
 $("logout").onclick=()=>signOut(auth);
 onAuthStateChanged(auth, user=>{

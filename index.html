@@ -66,6 +66,7 @@
   <button class="on" data-v="misu">거래처 미수/미지급</button>
   <button data-v="item">상품원장(재고)</button>
   <button data-v="ledger">거래처원장</button>
+  <button data-v="suja">수금일보</button>
 </div>
 <div class="wrap">
   <section id="v-misu">
@@ -102,6 +103,26 @@
     <div id="l-list" class="clist"></div>
     <div id="l-out"><p class="muted">거래처를 검색해서 선택하세요.</p></div>
   </section>
+  <section id="v-suja" style="display:none">
+    <div class="bar" style="flex-wrap:wrap;gap:8px">
+      <label class="muted">수금일자</label>
+      <input type="date" id="sj-from">
+      <span class="muted">~</span>
+      <input type="date" id="sj-to">
+      <select id="sj-sort"><option value="name">상호순</option><option value="code">코드순</option><option value="date">날짜순</option></select>
+      <button id="sj-go">조회</button>
+      <input class="search" id="sj-search" placeholder="거래처명 검색" style="flex:1;min-width:120px">
+    </div>
+    <div class="cards">
+      <div class="card"><div class="lbl">수금액 합계</div><div class="val pos" id="sj-amt">-</div></div>
+      <div class="card"><div class="lbl">에누리 합계</div><div class="val" id="sj-dc">-</div></div>
+      <div class="card"><div class="lbl">합계 (건수)</div><div class="val" id="sj-tot">-</div></div>
+    </div>
+    <div class="scroll"><table><thead><tr>
+      <th>수금일자</th><th>거래코드</th><th class="l">거래처명</th><th class="l">구분</th>
+      <th>수금액</th><th>에누리액</th><th>합계</th><th class="l">은행명</th><th class="l">참고사항</th></tr></thead>
+      <tbody id="sj-body"><tr><td colspan="9" class="loading">수금일자를 정하고 조회를 누르세요</td></tr></tbody></table></div>
+  </section>
   <div id="counts" class="muted" style="text-align:center;padding:16px 8px;border-top:1px solid #eaeaea;margin-top:18px">데이터 현황 확인 중...</div>
 </div>
 
@@ -122,7 +143,7 @@ setPersistence(auth, browserLocalPersistence).catch(()=>{});
 const won=(v)=>Math.round(v).toLocaleString("ko-KR");
 const fd=(d)=>d&&d.length===8?`${d.slice(0,4)}/${d.slice(4,6)}/${d.slice(6)}`:(d||"");
 
-let balances=[], lots=null, itemMap=null, custCache={}, allTx=null, nameMap=null;
+let balances=[], lots=null, itemMap=null, custCache={}, allTx=null, nameMap=null, bankMap=null, sujaRows=[], sujaKw="";
 const $=(id)=>document.getElementById(id);
 const m_pos=$("m-pos"), m_neg=$("m-neg"), m_net=$("m-net"), m_body=$("m-body"), m_search=$("m-search");
 const i_cnt=$("i-cnt"), i_kg=$("i-kg"), i_amt=$("i-amt"), i_body=$("i-body"), i_search=$("i-search");
@@ -131,8 +152,9 @@ const nowYM=()=>{const d=new Date();return `${d.getFullYear()}${String(d.getMont
 
 function switchTo(v){
   document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x.dataset.v===v));
-  ["misu","item","ledger"].forEach(k=>document.getElementById("v-"+k).style.display=k===v?"":"none");
+  ["misu","item","ledger","suja"].forEach(k=>document.getElementById("v-"+k).style.display=k===v?"":"none");
   if(v==="item"&&!lots) loadLots();
+  if(v==="suja"){ sjDefaults(); if(!sujaRows.length) loadSuja(); }
 }
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>switchTo(b.dataset.v));
 
@@ -336,10 +358,67 @@ async function openLedger(code){
 }
 window.openLedger=openLedger;
 
+// ===== 수금일보 =====
+async function loadBanks(){
+  if(bankMap) return bankMap; bankMap={};
+  try{ (await getDocs(col("banks"))).docs.forEach(d=>{const x=d.data(); if(x.code) bankMap[x.code]=x.name;}); }catch(e){}
+  return bankMap;
+}
+const GUBUN={"1":"현금/계좌","2":"대체","3":"기타","4":"카드"};
+function todayISO(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function sjDefaults(){
+  const f=document.getElementById("sj-from"), t=document.getElementById("sj-to");
+  if(f && !f.value){ f.value=todayISO(); t.value=todayISO(); }
+}
+async function loadSuja(){
+  const f=(document.getElementById("sj-from").value||"").replaceAll("-","");
+  const t=(document.getElementById("sj-to").value||"").replaceAll("-","");
+  if(!f||!t){ return; }
+  const body=document.getElementById("sj-body");
+  body.innerHTML='<tr><td colspan="9" class="loading">불러오는 중...</td></tr>';
+  const [{byCust},nm,bm]=await Promise.all([loadAllTx(),loadNames(),loadBanks()]);
+  const rows=[];
+  for(const code in byCust){
+    for(const x of byCust[code].pays){
+      const d=x.date||"";
+      if(d<f||d>t) continue;
+      rows.push({date:d, code, name:nm[code]||code,
+        gubun:GUBUN[x.gubun]|| (x.bank? "계좌":"") || (x.gubun||""),
+        amt:(x.amt||0), dc:(x.dc||0), bank:(x.bank?(bm[x.bank]||x.bank):""), remark:x.remark||""});
+    }
+  }
+  const sort=document.getElementById("sj-sort").value;
+  rows.sort((a,b)=> sort==="name"?a.name.localeCompare(b.name,"ko")
+    : sort==="code"?String(a.code).localeCompare(String(b.code))
+    : (a.date<b.date?-1:a.date>b.date?1:a.name.localeCompare(b.name,"ko")));
+  sujaRows=rows; renderSuja(sujaKw);
+}
+function renderSuja(kw){
+  sujaKw=kw||"";
+  const rows=sujaRows.filter(r=>!sujaKw||(r.name||"").includes(sujaKw));
+  const tBody=document.getElementById("sj-body");
+  if(!rows.length){ tBody.innerHTML='<tr><td colspan="9" class="loading">해당 기간 수금 내역이 없습니다</td></tr>';
+    document.getElementById("sj-amt").textContent=won(0); document.getElementById("sj-dc").textContent=won(0);
+    document.getElementById("sj-tot").textContent=won(0)+" (0건)"; return; }
+  let sa=0,sd=0;
+  tBody.innerHTML=rows.map(r=>{ sa+=r.amt; sd+=r.dc; const sum=r.amt+r.dc;
+    return `<tr><td>${fd(r.date)}</td><td>${r.code}</td>`+
+      `<td class="l"><span class="link" onclick="goLedger('${r.code}')">${r.name}</span></td>`+
+      `<td class="l">${r.gubun||""}</td><td>${won(r.amt)}</td><td>${r.dc?won(r.dc):""}</td>`+
+      `<td>${won(sum)}</td><td class="l">${r.bank||""}</td><td class="l">${r.remark||""}</td></tr>`;
+  }).join("");
+  document.getElementById("sj-amt").textContent=won(sa);
+  document.getElementById("sj-dc").textContent=won(sd);
+  document.getElementById("sj-tot").textContent=won(sa+sd)+` (${rows.length}건)`;
+}
+document.getElementById("sj-go").onclick=loadSuja;
+document.getElementById("sj-sort").onchange=loadSuja;
+document.getElementById("sj-search").oninput=e=>renderSuja(e.target.value.trim());
+
 // ===== 로그인 게이트 =====
 let _started=false;
 function loadCompanyData(){
-  balances=[]; allTx=null; nameMap=null; lots=null; itemMap=null; custCache={}; misuRows=[];
+  balances=[]; allTx=null; nameMap=null; lots=null; itemMap=null; custCache={}; misuRows=[]; bankMap=null; sujaRows=[];
   document.getElementById("hdrname").textContent=COMPANIES[COMPANY]||COMPANY;
   const itemTab=document.querySelector('.tabs button[data-v="item"]');
   if(itemTab) itemTab.style.display=(COMPANY==="sinhwafood")?"none":"";

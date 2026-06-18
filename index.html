@@ -40,6 +40,7 @@
   .tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;font-weight:600}
   .tag.s{background:#fdecea;color:#c0392b}.tag.p{background:#e8f5e9;color:#1a7f37}
   .tag.g{background:#eef;color:#3949ab}
+  .tag.b{background:#e7f0fb;color:#1f5fa8}.tag.o{background:#fdf2e3;color:#a86a00}.tag.k{background:#ede7f6;color:#5e35b1}
   .clist{display:flex;flex-direction:column;gap:1px;max-height:320px;overflow:auto;border:1px solid #eee;border-radius:8px;background:#fff}
   .clist div{padding:9px 12px;cursor:pointer;display:flex;justify-content:space-between;border-bottom:1px solid #f3f3f3}
   .clist div:hover{background:#faf3f4}
@@ -60,6 +61,7 @@
   <p id="lg-msg" class="muted" style="margin-top:12px;min-height:18px"></p>
 </div></div>
 <header><h1>🥩 <span id="hdrname">신화미트</span> ERP</h1><div style="display:flex;align-items:center;gap:10px"><select id="company" style="display:none;padding:5px 8px;border-radius:6px"></select><span class="stat" id="stat">불러오는 중...</span><button id="logout">로그아웃</button></div></header>
+<div id="updbar" style="background:#f6f1ee;color:#6b4a3a;font-size:13px;text-align:center;padding:7px 8px;border-bottom:1px solid #e7ddd6"></div>
 <div class="tabs">
   <button class="on" data-v="misu">거래처 미수/미지급</button>
   <button data-v="item">상품원장(재고)</button>
@@ -73,7 +75,7 @@
       <div class="card"><div class="lbl">순액</div><div class="val" id="m-net">-</div></div>
     </div>
     <div class="bar"><input class="search" id="m-search" placeholder="거래처명 검색"></div>
-    <p class="muted" style="margin-bottom:6px">거래처명을 누르면 이번 달 거래처원장이 열립니다. 현재 미수 = 2025 이월 + 올해 매출 − 총 수금.</p>
+    <p class="muted" style="margin-bottom:6px">거래처명을 누르면 이번 달 거래처원장(net)이 열립니다. 현재 잔액 = 2025 이월 + 매출 − 반입 − 수금 − 매입 + 반품 + 지급. (+ 미수 / − 미지급)</p>
     <div class="scroll"><table><thead><tr><th class="l">거래처명</th><th>2025 이월</th><th>올해 매출</th><th>총 수금</th><th>현재 미수</th></tr></thead>
       <tbody id="m-body"><tr><td colspan="5" class="loading">불러오는 중...</td></tr></tbody></table></div>
   </section>
@@ -138,11 +140,21 @@ document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>switchTo(b.da
 let misuRows=[], curKw="";
 async function loadAllTx(){
   if(allTx) return allTx;
-  const [s,p]=await Promise.all([getDocs(col("sales")), getDocs(col("payments"))]);
+  const [s,sr,p,pu,pr,zp]=await Promise.all([
+    getDocs(col("sales")), getDocs(col("sales_returns")),
+    getDocs(col("payments")), getDocs(col("purchases")),
+    getDocs(col("purchase_returns")), getDocs(col("supplier_payments"))
+  ]);
   const agg={}, byCust={};
-  const add=(c)=>{ if(!agg[c]) agg[c]={sale:0,pay:0}; if(!byCust[c]) byCust[c]={sales:[],pays:[]}; };
-  s.docs.forEach(d=>{const x=d.data(); if((x.date||"")<"20260101")return; add(x.cust); agg[x.cust].sale+=(x.supply||0)+(x.vat||0); byCust[x.cust].sales.push(x);});
-  p.docs.forEach(d=>{const x=d.data(); if((x.date||"")<"20260101")return; add(x.cust); agg[x.cust].pay+=(x.amt||0)+(x.dc||0); byCust[x.cust].pays.push(x);});
+  const add=(c)=>{ if(!c) return; if(!agg[c]) agg[c]={sale:0,sret:0,pay:0,purch:0,pret:0,zpay:0};
+    if(!byCust[c]) byCust[c]={sales:[],srets:[],pays:[],purchs:[],prets:[],zpays:[]}; };
+  const yr=(x)=>(x.date||"")>="20260101";
+  s.docs.forEach(d=>{const x=d.data(); if(!yr(x))return; add(x.cust); agg[x.cust].sale+=(x.supply||0)+(x.vat||0); byCust[x.cust].sales.push(x);});
+  sr.docs.forEach(d=>{const x=d.data(); if(!yr(x))return; add(x.cust); agg[x.cust].sret+=(x.supply||0)+(x.vat||0); byCust[x.cust].srets.push(x);});
+  p.docs.forEach(d=>{const x=d.data(); if(!yr(x))return; add(x.cust); agg[x.cust].pay+=(x.amt||0)+(x.dc||0); byCust[x.cust].pays.push(x);});
+  pu.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!yr(x))return; add(c); agg[c].purch+=(x.amt||0)+(x.vat||0); byCust[c].purchs.push(x);});
+  pr.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!yr(x))return; add(c); agg[c].pret+=(x.amt||0)+(x.vat||0); byCust[c].prets.push(x);});
+  zp.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!yr(x))return; add(c); agg[c].zpay+=(x.amt||0)+(x.dc||0); byCust[c].zpays.push(x);});
   return allTx={agg,byCust};
 }
 async function loadNames(){
@@ -164,8 +176,10 @@ async function loadMisu(){
   const [{agg},nm]=await Promise.all([loadAllTx(),loadNames()]);
   const obal={}; balances.forEach(b=>obal[b.code]=b.balance||0);
   const codes=new Set([...balances.map(b=>b.code), ...Object.keys(agg)]);
-  misuRows=[...codes].map(c=>{const a=agg[c]||{sale:0,pay:0}; const op=obal[c]||0;
-    return {code:c,name:nm[c]||c,open:op,sale:a.sale,pay:a.pay,current:op+a.sale-a.pay};})
+  misuRows=[...codes].map(c=>{const a=agg[c]||{sale:0,sret:0,pay:0,purch:0,pret:0,zpay:0}; const op=obal[c]||0;
+    const saleNet=a.sale-a.sret, purchNet=a.purch-a.pret;
+    const current=op+saleNet-a.pay-purchNet+a.zpay;   // 기초+매출−반입−수금−매입+반품+지급
+    return {code:c,name:nm[c]||c,open:op,sale:saleNet,pay:a.pay,current};})
     .filter(r=>r.open||r.sale||r.pay||r.current);
   misuRows.sort((a,b)=>b.current-a.current);
   const pos=misuRows.filter(r=>r.current>0).reduce((s,r)=>s+r.current,0);
@@ -239,9 +253,9 @@ async function loadItems(){
 async function loadCust(code){
   await loadItems();
   const {byCust}=await loadAllTx(); await loadNames();
-  const c=byCust[code]||{sales:[],pays:[]};
+  const c=byCust[code]||{sales:[],srets:[],pays:[],purchs:[],prets:[],zpays:[]};
   const bal=(balances.find(x=>x.code===code)||{}).balance||0;
-  return {sales:c.sales, pays:c.pays, bal, name:(nameMap[code]||code)};
+  return {...c, bal, name:(nameMap[code]||code)};
 }
 window.goLedger=(code)=>{ switchTo("ledger"); window._curCust=code;
   document.getElementById("l-month").value=nowYM(); document.getElementById("l-list").innerHTML=""; openLedger(code); };
@@ -250,54 +264,75 @@ async function openLedger(code){
   window._curCust=code;
   const out=document.getElementById("l-out"); out.innerHTML='<p class="loading">불러오는 중...</p>';
   const ym=document.getElementById("l-month").value;
-  const {sales,pays,bal,name}=await loadCust(code);
-  const mStart=ym+"01", mEnd=ym+"31";
-  // 연초(2025-12-31) 기초 + 2026 거래 = 흐름. 2026 이전 거래는 기초에 이미 포함 → 제외
-  const SINCE="20260101";
-  let before=0, allnet=0;
-  sales.forEach(x=>{if(x.date<SINCE) return; const v=(x.supply||0)+(x.vat||0); allnet+=v; if(x.date<mStart) before+=v;});
-  pays.forEach(x=>{if(x.date<SINCE) return; const v=(x.amt||0)+(x.dc||0); allnet-=v; if(x.date<mStart) before-=v;});
-  const carry=bal+before;     // 전월이월 = 기초 + 이 달 시작 전 2026거래
-  const current=bal+allnet;   // 현재 미수 = 기초 + 2026 전체거래
-  const lines=[];
-  sales.forEach(x=>{if(x.date>=mStart&&x.date<=mEnd){const it=itemMap[x.item]||{};
-    lines.push({d:x.date,t:"s",nm:it.name||x.item,og:it.origin||"",gr:it.grade||"",box:x.box||0,kg:x.kg||0,
-      price:x.price||(x.kg?Math.round((x.supply||0)/x.kg):0),amt:(x.supply||0)+(x.vat||0)});}});
-  pays.forEach(x=>{if(x.date>=mStart&&x.date<=mEnd) lines.push({d:x.date,t:"p",amt:(x.amt||0)+(x.dc||0)});});
-  lines.sort((a,b)=>a.d===b.d?(a.t==="s"?-1:1):(a.d<b.d?-1:1));
-
-  const og=(x)=>x.og?`${x.og}${x.gr?'('+x.gr+')':''}`:"";
-  let run=carry, mKg=0,ts=0,tp=0;
-  let dKg=0,dAmt=0,dPay=0,curD=null,body="";
-  const colspanL=6;
-  body+=`<tr class="carry"><td class="l" colspan="${colspanL}">전월이월</td><td></td><td>${won(carry)}</td></tr>`;
-  const dayRow=()=>{ if(curD!==null){
-    body+=`<tr class="sub"><td class="l" colspan="4">▷ ${fd(curD)} 합계</td><td>${dKg?dKg.toFixed(1):""}</td><td></td>`+
-          `<td>${dAmt?won(dAmt):(dPay?'<span class=pos>수금 '+won(dPay)+'</span>':"")}</td><td>${won(run)}</td></tr>`;
-    } dKg=dAmt=dPay=0; };
-  for(const x of lines){
-    if(x.d!==curD){ dayRow(); curD=x.d; }
-    if(x.t==="s"){ run+=x.amt; ts+=x.amt; mKg+=x.kg; dKg+=x.kg; dAmt+=x.amt;
-      body+=`<tr><td>${fd(x.d)}</td><td class="l">${x.nm}</td><td class="l">${og(x)}</td><td>${x.box||""}</td>`+
-            `<td>${x.kg||""}</td><td>${won(x.price)}</td><td>${won(x.amt)}</td><td>${won(run)}</td></tr>`;
-    } else { run-=x.amt; tp+=x.amt; dPay+=x.amt;
-      body+=`<tr class="rowpay"><td>${fd(x.d)}</td><td class="l"><span class="tag p">수금</span></td><td class="l"></td>`+
-            `<td></td><td></td><td></td><td class="pos">${won(x.amt)}</td><td>${won(run)}</td></tr>`;
+  const {sales,srets,pays,purchs,prets,zpays,bal,name}=await loadCust(code);
+  const mStart=ym+"01", mEnd=ym+"31", SINCE="20260101";
+  const G=(x)=>(x.supply||0)+(x.vat||0);          // 상품(매출/반입)
+  const P=(x)=>(x.amt||0)+(x.vat||0);             // 매입/반품 금액
+  const C=(x)=>(x.amt||0)+(x.dc||0);              // 수금/지급
+  // 부호: +1 = 받을것(미수) 늘림, -1 = 줄임. 잔액(net) = 미수 − 미지급
+  const flows=[
+    {a:sales,  sgn:+1, amt:G, goods:true,  t:"s",  lab:"매출", cls:"s"},
+    {a:srets,  sgn:-1, amt:G, goods:true,  t:"sr", lab:"반입", cls:"o"},
+    {a:pays,   sgn:-1, amt:C, goods:false, t:"p",  lab:"수금", cls:"p"},
+    {a:purchs, sgn:-1, amt:P, goods:true,  t:"pu", lab:"매입", cls:"b"},
+    {a:prets,  sgn:+1, amt:P, goods:true,  t:"pr", lab:"반품", cls:"o"},
+    {a:zpays,  sgn:+1, amt:C, goods:false, t:"zp", lab:"지급", cls:"k"},
+  ];
+  const ord={s:0,sr:1,pu:2,pr:3,p:4,zp:5};
+  let before=0, allnet=0; const lines=[];
+  for(const f of flows){
+    for(const x of f.a){
+      if((x.date||"")<SINCE) continue;
+      const v=f.sgn*f.amt(x);
+      allnet+=v; if(x.date<mStart) before+=v;
+      if(x.date>=mStart && x.date<=mEnd){
+        const it=f.goods?(itemMap[x.item]||{}):{};
+        lines.push({d:x.date,t:f.t,lab:f.lab,cls:f.cls,sgn:f.sgn,goods:f.goods,
+          nm:f.goods?(it.name||x.item):"", og:it.origin||"", gr:it.grade||"",
+          box:x.box||0, kg:x.kg||0,
+          price:f.goods?(x.price||(x.kg?Math.round(f.amt(x)/x.kg):0)):0,
+          amt:f.amt(x)});
+      }
     }
   }
-  dayRow();
-  body+=`<tr class="mtot"><td class="l" colspan="4">■ ${ym.slice(4)}월 합계 (매출 ${won(ts)} · 수금 ${won(tp)})</td>`+
-        `<td>${mKg?mKg.toFixed(1):""}</td><td></td><td>${won(ts)}</td><td>${won(run)}</td></tr>`;
-  body+=`<tr class="mend"><td class="l" colspan="${colspanL}">월말 잔액</td><td></td><td>${won(run)}</td></tr>`;
+  const carry=bal+before, current=bal+allnet;
+  lines.sort((a,b)=>a.d===b.d?(ord[a.t]-ord[b.t]):(a.d<b.d?-1:1));
 
+  const og=(x)=>x.og?`${x.og}${x.gr?'('+x.gr+')':''}`:"";
+  let run=carry; const tot={s:0,sr:0,p:0,pu:0,pr:0,zp:0}; let mKg=0;
+  let body=`<tr class="carry"><td class="l" colspan="6">전월이월</td><td></td><td>${won(carry)}</td></tr>`;
+  for(const x of lines){
+    run+=x.sgn*x.amt; tot[x.t]+=x.amt;
+    const amtTxt=(x.sgn<0?'−':'+')+won(x.amt);
+    const amtCls=x.sgn<0?'pos':'';
+    if(x.goods){ mKg+=x.kg;
+      body+=`<tr${x.sgn<0?' class="rowpay"':''}><td>${fd(x.d)}</td>`+
+            `<td class="l">${x.nm} <span class="tag ${x.cls}">${x.lab}</span></td>`+
+            `<td class="l">${og(x)}</td><td>${x.box||""}</td><td>${x.kg||""}</td>`+
+            `<td>${won(x.price)}</td><td class="${amtCls}">${amtTxt}</td><td>${won(run)}</td></tr>`;
+    } else {
+      body+=`<tr class="rowpay"><td>${fd(x.d)}</td>`+
+            `<td class="l"><span class="tag ${x.cls}">${x.lab}</span></td>`+
+            `<td class="l"></td><td></td><td></td><td></td>`+
+            `<td class="pos">${amtTxt}</td><td>${won(run)}</td></tr>`;
+    }
+  }
+  const parts=[];
+  if(tot.s)parts.push("매출 "+won(tot.s)); if(tot.sr)parts.push("반입 "+won(tot.sr));
+  if(tot.p)parts.push("수금 "+won(tot.p)); if(tot.pu)parts.push("매입 "+won(tot.pu));
+  if(tot.pr)parts.push("반품 "+won(tot.pr)); if(tot.zp)parts.push("지급 "+won(tot.zp));
+  body+=`<tr class="mtot"><td class="l" colspan="6">■ ${ym.slice(4)}월 (${parts.join(" · ")||"거래없음"})</td><td></td><td>${won(run)}</td></tr>`;
+  body+=`<tr class="mend"><td class="l" colspan="6">월말 잔액</td><td></td><td>${won(run)}</td></tr>`;
+
+  const saleNet=tot.s-tot.sr, buyNet=tot.pu-tot.pr-tot.zp;
   out.innerHTML=`<div class="cards">
-      <div class="card"><div class="lbl">${name} · 현재 미수</div><div class="val ${current>=0?'pos':'neg'}">${won(Math.abs(current))}${current<0?' (미지급)':''}</div></div>
-      <div class="card"><div class="lbl">${ym.slice(4)}월 매출</div><div class="val">${won(ts)}</div></div>
-      <div class="card"><div class="lbl">${ym.slice(4)}월 수금</div><div class="val">${won(tp)}</div></div>
+      <div class="card"><div class="lbl">${name} · 현재 잔액</div><div class="val ${current>=0?'pos':'neg'}">${won(Math.abs(current))}${current<0?' (미지급)':(current>0?' (미수)':'')}</div></div>
+      <div class="card"><div class="lbl">${ym.slice(4)}월 매출−반입</div><div class="val">${won(saleNet)}</div></div>
+      <div class="card"><div class="lbl">${ym.slice(4)}월 매입−반품−지급</div><div class="val">${won(buyNet)}</div></div>
     </div>
-    <div class="scroll"><table><thead><tr><th>월/일</th><th class="l">상품명</th><th class="l">원산지(등급)</th><th>Box</th><th>Kg</th><th>단가</th><th>금액</th><th>미수잔액</th></tr></thead>
+    <div class="scroll"><table><thead><tr><th>월/일</th><th class="l">상품명</th><th class="l">원산지(등급)</th><th>Box</th><th>Kg</th><th>단가</th><th>증감</th><th>잔액</th></tr></thead>
     <tbody>${body}</tbody></table></div>
-    <p class="muted" style="margin-top:8px">* 전월이월·미수잔액 = 연초(2025-12-31) 기초 + 올해 거래 누계. 매출·수금이 다 올라오면 정확히 맞습니다.</p>`;
+    <p class="muted" style="margin-top:8px">* 매출·반입·수금·매입·반품·지급을 한 원장에 합친 net 잔액입니다 (+ 미수 / − 미지급). 전월이월·잔액 = 연초(2025-12-31) 기초 + 올해 거래 누계.</p>`;
 }
 window.openLedger=openLedger;
 
@@ -344,7 +379,6 @@ async function loadCounts(){
   try{
     const names=[["거래처","balances"],["품목","items"],["재고","lots"],["매출","sales"],["수금","payments"],["매입","purchases"]];
     const cs=await Promise.all(names.map(([,c])=>getCountFromServer(col(c)).then(s=>s.data().count).catch(()=>null)));
-    let dates="";
     try{
       const [st,lt]=await Promise.all([
         getDoc(doc(db,`companies/${COMPANY}/meta/status`)).catch(()=>null),
@@ -353,10 +387,14 @@ async function loadCounts(){
       const lup=(lt&&lt.exists())?lt.data().updated:null;
       const fmt=(iso)=>{ if(!iso)return "—"; const d=new Date(iso);
         return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
-      dates=`<br>🕒 마지막 업데이트 — 거래 <b>${fmt(s.sync)}</b> · 재고 <b>${fmt(lup||s.stock)}</b> · 미수 <b>${fmt(s.balances)}</b>`;
+      const hideStock=(COMPANY==="sinhwafood");
+      document.getElementById("updbar").innerHTML=
+        `🕒 마지막 업데이트 &nbsp; 거래 <b>${fmt(s.sync)}</b>`+
+        (hideStock?"":` · 재고 <b>${fmt(lup||s.stock)}</b>`)+
+        ` · 미수 <b>${fmt(s.balances)}</b>`;
     }catch(e){}
     document.getElementById("counts").innerHTML="📊 데이터 현황 &nbsp; "+
-      names.map(([k],i)=>cs[i]==null?"":`${k} <b>${cs[i].toLocaleString()}</b>건`).filter(Boolean).join(" · ")+dates;
+      names.map(([k],i)=>cs[i]==null?"":`${k} <b>${cs[i].toLocaleString()}</b>건`).filter(Boolean).join(" · ");
   }catch(e){ document.getElementById("counts").textContent=""; }
 }
 </script>

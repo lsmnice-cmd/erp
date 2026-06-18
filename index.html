@@ -59,7 +59,7 @@
   <button id="lg-google">Google로 로그인</button>
   <p id="lg-msg" class="muted" style="margin-top:12px;min-height:18px"></p>
 </div></div>
-<header><h1>🥩 신화미트 ERP</h1><div style="display:flex;align-items:center;gap:10px"><span class="stat" id="stat">불러오는 중...</span><button id="logout">로그아웃</button></div></header>
+<header><h1>🥩 <span id="hdrname">신화미트</span> ERP</h1><div style="display:flex;align-items:center;gap:10px"><select id="company" style="display:none;padding:5px 8px;border-radius:6px"></select><span class="stat" id="stat">불러오는 중...</span><button id="logout">로그아웃</button></div></header>
 <div class="tabs">
   <button class="on" data-v="misu">거래처 미수/미지급</button>
   <button data-v="item">상품원장(재고)</button>
@@ -108,7 +108,8 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getFirestore, initializeFirestore, collection, getDocs, getCountFromServer, doc, getDoc, query, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 const firebaseConfig={apiKey:"AIzaSyB63DtgWz20gspl9AaFCM0qBHBSaWiBL1s",authDomain:"sinhwa-erp.firebaseapp.com",projectId:"sinhwa-erp",storageBucket:"sinhwa-erp.firebasestorage.app",messagingSenderId:"211386518933",appId:"1:211386518933:web:75f00d15b158be43fdba9c"};
-const COMPANY="sinhwameat";
+let COMPANY="sinhwameat";
+const COMPANIES={sinhwameat:"신화미트", sinhwafood:"신화푸드"};
 const app=initializeApp(firebaseConfig);
 let db;
 try{ db=initializeFirestore(app,{experimentalForceLongPolling:true}); }
@@ -302,14 +303,29 @@ window.openLedger=openLedger;
 
 // ===== 로그인 게이트 =====
 let _started=false;
-function startApp(){
-  if(_started) return; _started=true;
-  fillMonths();
+function loadCompanyData(){
+  balances=[]; allTx=null; nameMap=null; lots=null; itemMap=null; custCache={}; misuRows=[];
+  document.getElementById("hdrname").textContent=COMPANIES[COMPANY]||COMPANY;
+  const itemTab=document.querySelector('.tabs button[data-v="item"]');
+  if(itemTab) itemTab.style.display=(COMPANY==="sinhwafood")?"none":"";
+  m_body.innerHTML='<tr><td colspan="5" class="loading">불러오는 중...</td></tr>';
+  i_body.innerHTML='<tr><td colspan="12" class="loading">상품원장 탭을 누르면 불러옵니다</td></tr>';
+  document.getElementById("l-out").innerHTML='<p class="muted">거래처를 검색해서 선택하세요.</p>';
+  document.getElementById("l-list").innerHTML="";
   const _to=setTimeout(()=>{ if(m_body.innerHTML.includes("불러오는"))
-    m_body.innerHTML=`<tr><td colspan="5" class="loading">연결이 지연됩니다.<br>① 인터넷 연결 ② Firestore 보안규칙 ③ 데이터 업로드 확인.<br><small>그래도 안 되면 F12 → Console 의 빨간 오류를 알려주세요.</small></td></tr>`; }, 15000);
+    m_body.innerHTML=`<tr><td colspan="5" class="loading">연결이 지연됩니다.<br>① 인터넷 ② 보안규칙 ③ 데이터 업로드 확인.</td></tr>`; }, 15000);
   loadMisu().then(()=>clearTimeout(_to)).catch(e=>{ clearTimeout(_to); stat.textContent="연결 오류";
     m_body.innerHTML=`<tr><td colspan="5" class="loading">데이터를 못 불러왔습니다.<br><small>${e.message}</small></td></tr>`;});
   loadCounts();
+}
+function startApp(){
+  if(_started) return; _started=true;
+  fillMonths();
+  const sel=document.getElementById("company");
+  sel.innerHTML=Object.entries(COMPANIES).map(([k,v])=>`<option value="${k}">${v}</option>`).join("");
+  sel.value=COMPANY; sel.style.display="";
+  sel.onchange=()=>{ COMPANY=sel.value; switchTo("misu"); loadCompanyData(); };
+  loadCompanyData();
 }
 async function doLogin(){
   $("lg-msg").textContent="구글 로그인 화면으로 이동합니다...";
@@ -326,11 +342,21 @@ onAuthStateChanged(auth, user=>{
 
 async function loadCounts(){
   try{
-    const names=[["거래처(미수)","balances"],["품목","items"],["상품원장(재고)","lots"],["매출","sales"],["수금","payments"],["매입","purchases"]];
+    const names=[["거래처","balances"],["품목","items"],["재고","lots"],["매출","sales"],["수금","payments"],["매입","purchases"]];
     const cs=await Promise.all(names.map(([,c])=>getCountFromServer(col(c)).then(s=>s.data().count).catch(()=>null)));
+    let dates="";
+    try{
+      const [st,lt]=await Promise.all([
+        getDoc(doc(db,`companies/${COMPANY}/meta/status`)).catch(()=>null),
+        getDoc(doc(db,`companies/${COMPANY}/meta/lots`)).catch(()=>null)]);
+      const s=(st&&st.exists())?st.data():{};
+      const lup=(lt&&lt.exists())?lt.data().updated:null;
+      const fmt=(iso)=>{ if(!iso)return "—"; const d=new Date(iso);
+        return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
+      dates=`<br>🕒 마지막 업데이트 — 거래 <b>${fmt(s.sync)}</b> · 재고 <b>${fmt(lup||s.stock)}</b> · 미수 <b>${fmt(s.balances)}</b>`;
+    }catch(e){}
     document.getElementById("counts").innerHTML="📊 데이터 현황 &nbsp; "+
-      names.map(([k],i)=>cs[i]==null?"":`${k} <b>${cs[i].toLocaleString()}</b>건`).filter(Boolean).join(" · ")+
-      "<br><small>다시 올린 뒤 이 숫자가 안 늘면 중복 없이 덮어쓴 것입니다 (새 거래만큼만 증가).</small>";
+      names.map(([k],i)=>cs[i]==null?"":`${k} <b>${cs[i].toLocaleString()}</b>건`).filter(Boolean).join(" · ")+dates;
   }catch(e){ document.getElementById("counts").textContent=""; }
 }
 </script>

@@ -149,12 +149,12 @@ async function loadAllTx(){
   const add=(c)=>{ if(!c) return; if(!agg[c]) agg[c]={sale:0,sret:0,pay:0,purch:0,pret:0,zpay:0};
     if(!byCust[c]) byCust[c]={sales:[],srets:[],pays:[],purchs:[],prets:[],zpays:[]}; };
   const yr=(x)=>(x.date||"")>="20260101";
-  s.docs.forEach(d=>{const x=d.data(); if(!yr(x))return; add(x.cust); agg[x.cust].sale+=(x.supply||0)+(x.vat||0); byCust[x.cust].sales.push(x);});
-  sr.docs.forEach(d=>{const x=d.data(); if(!yr(x))return; add(x.cust); agg[x.cust].sret+=(x.supply||0)+(x.vat||0); byCust[x.cust].srets.push(x);});
-  p.docs.forEach(d=>{const x=d.data(); if(!yr(x))return; add(x.cust); agg[x.cust].pay+=(x.amt||0)+(x.dc||0); byCust[x.cust].pays.push(x);});
-  pu.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!yr(x))return; add(c); agg[c].purch+=(x.amt||0)+(x.vat||0); byCust[c].purchs.push(x);});
-  pr.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!yr(x))return; add(c); agg[c].pret+=(x.amt||0)+(x.vat||0); byCust[c].prets.push(x);});
-  zp.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!yr(x))return; add(c); agg[c].zpay+=(x.amt||0)+(x.dc||0); byCust[c].zpays.push(x);});
+  s.docs.forEach(d=>{const x=d.data(); const c=x.cust; if(!c||!yr(x))return; add(c); agg[c].sale+=(x.supply||0)+(x.vat||0); byCust[c].sales.push(x);});
+  sr.docs.forEach(d=>{const x=d.data(); const c=x.cust; if(!c||!yr(x))return; add(c); agg[c].sret+=(x.supply||0)+(x.vat||0); byCust[c].srets.push(x);});
+  p.docs.forEach(d=>{const x=d.data(); const c=x.cust; if(!c||!yr(x))return; add(c); agg[c].pay+=(x.amt||0)+(x.dc||0); byCust[c].pays.push(x);});
+  pu.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!c||!yr(x))return; add(c); agg[c].purch+=(x.amt||0)+(x.vat||0); byCust[c].purchs.push(x);});
+  pr.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!c||!yr(x))return; add(c); agg[c].pret+=(x.amt||0)+(x.vat||0); byCust[c].prets.push(x);});
+  zp.docs.forEach(d=>{const x=d.data(); const c=x.supplier; if(!c||!yr(x))return; add(c); agg[c].zpay+=(x.amt||0)+(x.dc||0); byCust[c].zpays.push(x);});
   return allTx={agg,byCust};
 }
 async function loadNames(){

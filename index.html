@@ -129,7 +129,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, initializeFirestore, collection, getDocs, getCountFromServer, doc, getDoc, query, where } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 const firebaseConfig={apiKey:"AIzaSyB63DtgWz20gspl9AaFCM0qBHBSaWiBL1s",authDomain:"sinhwa-erp.firebaseapp.com",projectId:"sinhwa-erp",storageBucket:"sinhwa-erp.firebasestorage.app",messagingSenderId:"211386518933",appId:"1:211386518933:web:75f00d15b158be43fdba9c"};
 let COMPANY="sinhwameat";
 const COMPANIES={sinhwameat:"신화미트", sinhwafood:"신화푸드"};
@@ -442,9 +442,21 @@ function startApp(){
   loadCompanyData();
 }
 async function doLogin(){
-  $("lg-msg").textContent="구글 로그인 화면으로 이동합니다...";
-  try{ await signInWithRedirect(auth, new GoogleAuthProvider()); }
-  catch(e){ $("lg-msg").textContent="로그인 실패 — 다시 시도하세요. ("+(e.code||"")+")"; }
+  $("lg-msg").textContent="구글 로그인 중...";
+  const provider=new GoogleAuthProvider();
+  try{
+    await signInWithPopup(auth, provider);            // 데스크톱: 팝업(중간 사이트 쿠키에 안 기댐)
+  }catch(e){
+    const c=(e.code||"")+"";
+    // 팝업이 막히거나 환경상 불가하면 리다이렉트로 자동 전환(주로 모바일)
+    if(c.includes("popup")||c.includes("cancelled")||c.includes("operation-not-supported")){
+      $("lg-msg").textContent="구글 로그인 화면으로 이동합니다...";
+      try{ await signInWithRedirect(auth, provider); }
+      catch(e2){ $("lg-msg").textContent="로그인 실패 ("+(e2.code||e2.message||"")+")"; }
+    }else{
+      $("lg-msg").textContent="로그인 실패: "+(c||e.message||"");
+    }
+  }
 }
 getRedirectResult(auth).catch(e=>{ $("lg-msg").textContent="로그인 실패: "+(e.code||e.message||""); });
 $("lg-google").onclick=doLogin;
